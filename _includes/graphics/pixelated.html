@@ -1,0 +1,257 @@
+<script id="vertexShader" type="x-shader/x-vertex">
+
+      attribute vec2 a_pos;
+      
+      void main() {
+        mat4 mvp = mat4(1.0);
+        gl_Position = mvp * vec4(a_pos, 0.0, 1.0);
+
+      }
+    </script>
+    <!-- fragment shader -->
+    <script id="fragShader" type="x-shader/x-fragment">
+      precision mediump float;
+      
+      //https://community.arm.com/graphics/b/blog/posts/benchmarking-floating-point-precision-in-mobile-gpus
+      //mali400 has 10 bit precision and no mediump
+
+      uniform vec2 u_size;
+      uniform vec3 u_color;
+      uniform vec2 u_time;
+      
+      float rand(vec2 co){
+        //original one liner
+        //return fract(sin(dot(co.xy, vec2(12.9898,78.233))) * 43758.5453);
+        
+        //since opengl es only garantees that mediump will be 10 bits, we need to try and 
+        //keep the numbers low. The actual constants are mostly arbilitary chosen with the
+        //goal to give different weightings to the first or seccond element
+ 
+        vec3 product = vec3(  sin( dot(co, vec2(0.129898,0.78233))),
+                              sin( dot(co, vec2(0.689898,0.23233))),
+                              sin( dot(co, vec2(0.434198,0.51833))) );
+                              
+                              
+        vec3 weighting = vec3(4.37585453723, 2.465973, 3.18438);
+     
+        return fract(dot(weighting, product));
+        
+      }
+      
+      //add hi low number. 
+      vec2 Add2(vec2 a1, vec2 a2)
+      {
+        vec2 t = a1 + a2;
+        t.x += floor(t.y/1000.0);
+        t.y /= 1000.0;
+        
+        return t;
+      }
+      
+      //only need very basic subtraction
+      vec2 Sub2(vec2 a1, vec2 a2)
+      {
+        return a1 - a2;
+      }
+
+      void main() {
+        float gamma = 1.0;
+        vec2 pos = gl_FragCoord.xy;
+        
+        //float size = u_size.x * u_size.y;
+        
+        //generate black grid
+        vec2 modulus = floor(mod(pos * 0.5, 8.0));
+        vec2 div = floor(pos/16.0);
+        float grid = min(modulus.x * modulus.y, 1.0);
+        
+        vec2 ti = u_time;
+        float r = rand(div);
+        ti.y += r*1000.0;
+        ti.x += floor(ti.y/1000.0);
+        ti.y = mod(ti.y,1000.0);
+        
+        vec2 startTime = ti;
+        startTime.y = 0.0;
+        vec2 stopTime = Add2(ti, vec2(1.0,0.0));
+        stopTime.y = 0.0;
+        vec2 time = ti;
+        float percent = floor(Sub2(time, startTime).y/100.0)/10.0;
+        
+        float start = rand(div + mod(startTime * u_size, 1234.0) );
+        float stop  = rand(div + mod(stopTime * u_size, 1234.0) );
+        vec3 color = u_color * (start * (1.0 - percent) + stop * percent);
+        
+        //convert from linear color space to gamma and apply grid
+        color = pow(color, vec3(gamma) ) * grid;
+
+        gl_FragColor = vec4(color,1.0);
+
+      }
+    </script>
+
+<script>
+$(document).ready(function() {
+  var canvas = document.getElementById("canvasHeader");
+  var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+  var renderInfo = null;
+  
+  var date = new Date();
+  var startTime = date.getTime();
+  var lastFrame = 0;
+  
+  InitShaders();
+ 
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  
+  gl.clearColor(0.0, 0.0, 0.0, 1.0);
+
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  
+  requestAnimationFrame(Render);
+  var requestRender = true;
+
+  function Render()
+  {
+    var d = new Date();
+    var t = d.getTime()
+    var time = Math.floor((t - startTime));
+    var seconds = Math.floor(time/1000);
+    var milliseconds = (time % 1000);
+    
+    if( (t - lastFrame) >= 16)
+    {
+    
+      lastFrame = t;
+
+      gl.clearColor(0.0, 0.0, 0.0, 1.0);
+    
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    
+      gl.useProgram(renderInfo.program);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, renderInfo.verts);
+      gl.vertexAttribPointer(renderInfo.a_pos, 2, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(renderInfo.a_pos);
+  
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, renderInfo.indicies);
+  
+      gl.uniform2f(renderInfo.u_time, seconds, milliseconds);
+      gl.uniform2f(renderInfo.u_size, canvas.width, canvas.height);
+      gl.uniform3f(renderInfo.u_color, 0.0,0.0,1.0);
+  
+  
+      gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+    }
+
+    requestAnimationFrame(Render);
+
+  }
+  
+  
+
+  function CompileShader(shaderSource, shaderType) 
+  {
+    // Create the shader object
+    var shader = gl.createShader(shaderType);
+ 
+    // Set the shader source code.
+    gl.shaderSource(shader, shaderSource);
+ 
+    // Compile the shader
+    gl.compileShader(shader);
+ 
+    // Check if it compiled
+    var success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+    if (!success) 
+    {
+      // Something went wrong during compilation; get the error
+      var msg = gl.getShaderInfoLog(shader);
+      throw "could not compile shader:" + msg;
+    }
+ 
+    return shader;
+  }
+
+
+  function CreateProgram(vertexShader, fragmentShader) 
+  {
+    // create a program.
+    var program = gl.createProgram();
+ 
+    // attach the shaders.
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+ 
+    // link the program.
+    gl.linkProgram(program);
+ 
+    // Check if it linked.
+    var success = gl.getProgramParameter(program, gl.LINK_STATUS);
+    if (!success) {
+        // something went wrong with the link
+        throw ("program filed to link:" + gl.getProgramInfoLog (program));
+    }
+ 
+    return program;
+  };
+
+
+  function CreateShaderFromScript(scriptId, opt_shaderType) 
+  {
+    // look up the script tag by id.
+    var shaderScript = document.getElementById(scriptId);
+    if (!shaderScript) {
+      throw("*** Error: unknown script element " + scriptId);
+    }
+ 
+    // extract the contents of the script tag.
+    var shaderSource = shaderScript.text;
+ 
+    // If we didn't pass in a type, use the 'type' from
+    // the script tag.
+    if (!opt_shaderType) {
+      if (shaderScript.type == "x-shader/x-vertex") {
+        opt_shaderType = gl.VERTEX_SHADER;
+      } else if (shaderScript.type == "x-shader/x-fragment") {
+        opt_shaderType = gl.FRAGMENT_SHADER;
+      } else if (!opt_shaderType) {
+        throw("*** Error: shader type not set");
+      }
+    }
+ 
+    return CompileShader(shaderSource, opt_shaderType);
+  };
+  
+  function InitShaders()
+  {
+    var dataVerts = new Float32Array([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0, 1.0, -1.0]);
+    var dataIndicies = new Int16Array([0,1,3,2,3,1]);
+    
+    var verts = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, verts);
+    gl.bufferData(gl.ARRAY_BUFFER, dataVerts, gl.STATIC_DRAW);
+    
+    var indicies = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indicies);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, dataIndicies, gl.STATIC_DRAW);
+    
+    var vertShader = CreateShaderFromScript("vertexShader");
+    var fragShader = CreateShaderFromScript("fragShader");
+    var progShader = CreateProgram(vertShader, fragShader);
+    
+    renderInfo = {
+      verts:          verts,
+      indicies:       indicies,
+      program:        progShader, 
+      a_pos:          gl.getAttribLocation(progShader, "a_pos"),
+      u_color:        gl.getUniformLocation(progShader, "u_color"), 
+      u_size:         gl.getUniformLocation(progShader, "u_size"),
+      u_time:         gl.getUniformLocation(progShader, "u_time")
+    };
+  
+  }
+
+});
+</script>
